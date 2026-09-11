@@ -27,6 +27,33 @@ the same notification implementation.
 
 ## Install
 
+Add CacheBell to the `plugin` array in your OpenCode configuration
+(`~/.config/opencode/opencode.json` for a global installation):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-cachebell@0.1.0"]
+}
+```
+
+Keep your existing settings and other plugin entries. **Quit and restart
+OpenCode.** It downloads the published package from npm automatically: no clone,
+manual `npm install`, helper script, or build step is needed. This installation
+works the same on macOS, WSL, and native Windows. If you use `XDG_CONFIG_HOME`,
+substitute that directory for `~/.config`.
+
+The version pin makes upgrades deliberate: change `@0.1.0` to the desired
+published version and restart OpenCode. Do not also install a local copy of the
+plugin, or you may receive duplicate notifications.
+
+Package: [opencode-cachebell on npm](https://www.npmjs.com/package/opencode-cachebell).
+
+### Manual Installation
+
+For development or an installation without npm, you can instead use the single
+JavaScript file directly. Do not combine this with the npm installation above.
+
 Download `index.js` from this repository and put it in OpenCode's plugin directory
 as `cachebell.js`:
 
@@ -96,7 +123,7 @@ and [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-cl
 
 ## Configure
 
-Defaults need no configuration. For a file-copy installation, set
+Defaults need no configuration. For either installation method, set
 `OPENCODE_CACHEBELL` to a JSON object before starting OpenCode:
 
 ```sh
@@ -114,7 +141,7 @@ OpenCode versions supporting plugin option tuples can also use:
 ```json
 {
   "plugin": [
-    ["/absolute/path/to/index.js", {
+    ["opencode-cachebell@0.1.0", {
       "warningSeconds": 120,
       "ttlSeconds": { "anthropic": 3600 }
     }]
