@@ -1,0 +1,15 @@
+{
+  "name": "opencode-cachebell",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Native sound and desktop reminders before an OpenCode prompt cache window ends",
+  "type": "module",
+  "exports": "./index.js",
+  "files": ["index.js", "README.md"],
+  "scripts": {
+    "test": "node --test",
+    "test:notification": "node index.js --test-notification"
+  },
+  "engines": { "node": ">=22" },
+  "keywords": ["opencode", "opencode-plugin", "prompt-cache", "notifications", "wsl"]
+}
