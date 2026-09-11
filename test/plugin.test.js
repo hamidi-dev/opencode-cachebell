@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import os from "node:os";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import plugin from "../index.js";
 
 const NOW = 1_800_000_000_000;
@@ -9,7 +11,8 @@ const claude = { providerID: "anthropic", id: "claude-sonnet-4-6" };
 const gpt = { providerID: "openai", id: "gpt-6-astra" };
 const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
 
-async function setup(t, { config, platform = "darwin", release = "", get, fail = () => false } = {}) {
+async function setup(t, { config, platform = "darwin", release = "", get,
+    fail = () => false, failureCode = "ENOENT" } = {}) {
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: NOW });
   t.mock.method(os, "platform", () => platform);
   t.mock.method(os, "release", () => release);
@@ -17,7 +20,8 @@ async function setup(t, { config, platform = "darwin", release = "", get, fail =
   const logs = [];
   t.mock.method(childProcess, "execFile", (command, args, options, callback) => {
     calls.push({ command, args, options });
-    callback(fail(command) ? new Error("not available") : null);
+    callback(fail(command) ? Object.assign(new Error("not available"), { code: failureCode }) : null,
+      command === "wslpath" ? "\\\\wsl.localhost\\Ubuntu\\home\\User Name\\sounds\\pulse.wav\n" : "");
   });
   const hooks = await plugin({
     directory: "/projects/example",
@@ -58,6 +62,7 @@ test("Claude warns from request start, once, not from response completion", asyn
   assert.equal(s.calls.length, 0);
   await s.advance(1);
   assert.deepEqual(s.calls.map((c) => c.command), ["osascript", "afplay"]);
+  assert.equal(s.calls[1].args[0], fileURLToPath(new URL("../sounds/pulse.wav", import.meta.url)));
   assert.equal(s.calls[0].args.at(-2), "CacheBell - example");
   assert.match(s.calls[0].args.at(-1), /~2m 0s/);
   await s.complete();
@@ -242,14 +247,18 @@ test("WSL uses encoded Windows PowerShell, falling back when PATH omits it", asy
   await s.start();
   await s.finish();
   await s.advance(180_000);
-  assert.deepEqual(s.calls.map((c) => c.command), ["powershell.exe",
+  assert.deepEqual(s.calls.map((c) => c.command), ["wslpath", "powershell.exe",
     "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"]);
-  const script = Buffer.from(s.calls[0].args.at(-1), "base64").toString("utf16le");
-  assert.match(script, /SystemSounds/);
+  assert.equal(s.calls[0].args[0], "-w");
+  assert.equal(s.calls[0].args[1], fileURLToPath(new URL("../sounds/pulse.wav", import.meta.url)));
+  const script = Buffer.from(s.calls[1].args.at(-1), "base64").toString("utf16le");
+  assert.match(script, /SoundPlayer/);
+  assert.match(script, /PlaySync/);
   assert.match(script, /ShowBalloonTip/);
   assert.ok(!script.includes("$(bad)"));
   const data = JSON.parse(Buffer.from(script.match(/FromBase64String\('([^']+)'/)[1], "base64").toString());
   assert.match(data.message, /日本語/);
+  assert.equal(data.soundFile, "\\\\wsl.localhost\\Ubuntu\\home\\User Name\\sounds\\pulse.wav");
   assert.equal(s.calls[0].options.windowsHide, true);
 });
 
@@ -262,7 +271,8 @@ test("native Windows uses PowerShell and honors sound-only configuration", async
   assert.equal(s.calls.length, 1);
   assert.equal(s.calls[0].command, "powershell.exe");
   const script = Buffer.from(s.calls[0].args.at(-1), "base64").toString("utf16le");
-  assert.match(script, /SystemSounds/);
+  assert.match(script, /SoundPlayer/);
+  assert.match(script, /PlaySync/);
   assert.doesNotMatch(script, /ShowBalloonTip/);
 });
 
@@ -281,4 +291,111 @@ test("invalid options disable the plugin without breaking OpenCode", async (t) =
   const s = await setup(t, { config: { warningSeconds: -1 } });
   assert.deepEqual(s.hooks, {});
   assert.equal(s.logs.length, 1);
+});
+
+for (const sound of ["pulse", "chime", "knock", true, false]) {
+  test(`macOS sound selection: ${sound}`, async (t) => {
+    const s = await setup(t, { config: { sound } });
+    await s.create();
+    await s.start();
+    await s.finish();
+    await s.advance(180_000);
+    assert.equal(s.calls[0].command, "osascript");
+    if (sound === false) {
+      assert.equal(s.calls.length, 1);
+    } else {
+      assert.equal(s.calls[1].command, "afplay");
+      assert.equal(s.calls[1].args[0], fileURLToPath(new URL(
+        `../sounds/${sound === true ? "pulse" : sound}.wav`, import.meta.url,
+      )));
+    }
+  });
+}
+
+test("invalid sound names and path traversal disable the plugin", async (t) => {
+  const s = await setup(t, { config: { sound: "../../other" } });
+  assert.deepEqual(s.hooks, {});
+  assert.equal(s.logs.length, 1);
+  assert.equal(s.calls.length, 0);
+});
+
+test("Linux plays the selected bundled WAV", async (t) => {
+  const s = await setup(t, { platform: "linux", config: { sound: "knock" } });
+  await s.create();
+  await s.start();
+  await s.finish();
+  await s.advance(180_000);
+  assert.equal(s.calls[1].command, "canberra-gtk-play");
+  assert.deepEqual(s.calls[1].args, ["-f", fileURLToPath(new URL("../sounds/knock.wav", import.meta.url))]);
+});
+
+test("Windows passes the chosen bundled sound as data, not executable code", async (t) => {
+  const s = await setup(t, { platform: "win32", config: { sound: "chime" } });
+  await s.create();
+  await s.start();
+  await s.finish();
+  await s.advance(180_000);
+  const script = Buffer.from(s.calls[0].args.at(-1), "base64").toString("utf16le");
+  const data = JSON.parse(Buffer.from(script.match(/FromBase64String\('([^']+)'/)[1], "base64").toString());
+  assert.equal(data.soundFile, fileURLToPath(new URL("../sounds/chime.wav", import.meta.url)));
+  assert.doesNotMatch(script, /chime\.wav/);
+  assert.match(script, /catch \{ \$soundFailed = \$true \}/);
+});
+
+test("WSL path translation failure still delivers a notification and logs failed sound", async (t) => {
+  const s = await setup(t, { platform: "linux", release: "microsoft",
+    fail: (command) => command === "wslpath" });
+  await s.create();
+  await s.start();
+  await s.finish();
+  await s.advance(180_000);
+  assert.deepEqual(s.calls.map((c) => c.command), ["wslpath", "powershell.exe"]);
+  const script = Buffer.from(s.calls[1].args.at(-1), "base64").toString("utf16le");
+  assert.match(script, /ShowBalloonTip/);
+  assert.doesNotMatch(script, /SoundPlayer/);
+  assert.equal(s.logs.length, 1);
+});
+
+test("WSL sound off needs no path translation", async (t) => {
+  const s = await setup(t, { platform: "linux", release: "microsoft", config: { sound: false } });
+  await s.create();
+  await s.start();
+  await s.finish();
+  await s.advance(180_000);
+  assert.deepEqual(s.calls.map((c) => c.command), ["powershell.exe"]);
+  const script = Buffer.from(s.calls[0].args.at(-1), "base64").toString("utf16le");
+  assert.doesNotMatch(script, /SoundPlayer/);
+});
+
+test("PowerShell runtime failures do not retry and duplicate notifications", async (t) => {
+  const s = await setup(t, { platform: "linux", release: "microsoft",
+    fail: (command) => command === "powershell.exe", failureCode: 1 });
+  await s.create();
+  await s.start();
+  await s.finish();
+  await s.advance(180_000);
+  assert.deepEqual(s.calls.map((c) => c.command), ["wslpath", "powershell.exe"]);
+  assert.equal(s.logs.length, 1);
+});
+
+test("bundled sounds are short, non-clipping PCM WAVs usable by Windows SoundPlayer", () => {
+  for (const sound of ["pulse", "chime", "knock"]) {
+    const wav = readFileSync(new URL(`../sounds/${sound}.wav`, import.meta.url));
+    assert.equal(wav.toString("ascii", 0, 4), "RIFF");
+    assert.equal(wav.readUInt32LE(4), wav.length - 8);
+    assert.equal(wav.toString("ascii", 8, 16), "WAVEfmt ");
+    assert.equal(wav.readUInt32LE(16), 16);
+    assert.equal(wav.readUInt16LE(20), 1);
+    assert.equal(wav.readUInt16LE(22), 1);
+    assert.equal(wav.readUInt32LE(24), 44100);
+    assert.equal(wav.readUInt16LE(34), 16);
+    assert.equal(wav.toString("ascii", 36, 40), "data");
+    assert.equal(wav.readUInt32LE(40), wav.length - 44);
+    assert.ok((wav.length - 44) / 88200 <= 1);
+    let peak = 0;
+    for (let offset = 44; offset < wav.length; offset += 2) {
+      peak = Math.max(peak, Math.abs(wav.readInt16LE(offset)));
+    }
+    assert.ok(peak > 1000 && peak < 20000);
+  }
 });

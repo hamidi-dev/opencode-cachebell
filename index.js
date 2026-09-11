@@ -1,21 +1,22 @@
 import childProcess from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const BACKGROUND_AGENTS = new Set(["title", "summary", "compaction"]);
 
 function settings(options = {}) {
   const config = {
     warningSeconds: 120,
-    sound: true,
+    sound: "pulse",
     notification: true,
     ttlSeconds: {},
     ...options,
     ...JSON.parse(process.env.OPENCODE_CACHEBELL || "{}"),
   };
   if (!Number.isFinite(config.warningSeconds) || config.warningSeconds <= 0 ||
-      typeof config.sound !== "boolean" || typeof config.notification !== "boolean" ||
+      ![true, false, "pulse", "chime", "knock"].includes(config.sound) ||
+      typeof config.notification !== "boolean" ||
       !config.ttlSeconds || typeof config.ttlSeconds !== "object" ||
       Array.isArray(config.ttlSeconds) ||
       Object.values(config.ttlSeconds).some((n) => !Number.isFinite(n) || n < 0)) {
@@ -39,15 +40,19 @@ function cacheTTL(model, config) {
 function run(command, args) {
   return new Promise((resolve) => {
     try {
-      childProcess.execFile(command, args, { timeout: 10_000, windowsHide: true },
-        (error) => resolve(!error));
-    } catch {
-      resolve(false);
+      childProcess.execFile(command, args, { timeout: 10_000, windowsHide: true, encoding: "utf8" },
+        (error, stdout) => resolve({ ok: !error, code: error?.code, stdout: stdout || "" }));
+    } catch (error) {
+      resolve({ ok: false, code: error.code, stdout: "" });
     }
   });
 }
 
 async function notify(title, message, config) {
+  if (!config.sound && !config.notification) return true;
+  const soundFile = config.sound ? fileURLToPath(new URL(
+    `./sounds/${config.sound === true ? "pulse" : config.sound}.wav`, import.meta.url,
+  )) : undefined;
   const results = [];
   if (os.platform() === "darwin") {
     if (config.notification) {
@@ -55,15 +60,29 @@ async function notify(title, message, config) {
         "display notification (item 2 of argv) with title (item 1 of argv)",
         "-e", "end run", title, message]));
     }
-    if (config.sound) results.push(run("afplay", ["/System/Library/Sounds/Glass.aiff"]));
+    if (soundFile) results.push(run("afplay", [soundFile]));
   } else if (os.platform() === "win32" ||
       (os.platform() === "linux" && /microsoft|wsl/i.test(os.release()))) {
-    // Encode both data and program: titles never become executable PowerShell.
-    const data = Buffer.from(JSON.stringify({ title, message }), "utf8").toString("base64");
+    let windowsSound = soundFile;
+    if (soundFile && os.platform() === "linux") {
+      // Cached npm files live inside WSL; Windows SoundPlayer needs a host path.
+      const translated = await run("wslpath", ["-w", soundFile]);
+      windowsSound = translated.ok ? translated.stdout.trim() : undefined;
+    }
+    // Encode data separately: session titles and file paths are never code.
+    const data = Buffer.from(JSON.stringify({ title, message, soundFile: windowsSound }), "utf8").toString("base64");
     const script = [
       "$ErrorActionPreference = 'Stop'",
+      "$soundFailed = $false",
       `$data = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${data}')) | ConvertFrom-Json`,
-      ...(config.sound ? ["[System.Media.SystemSounds]::Exclamation.Play()"] : []),
+      ...(windowsSound ? [
+        "$player = $null",
+        "try {",
+        "$player = New-Object System.Media.SoundPlayer",
+        "$player.SoundLocation = $data.soundFile",
+        "$player.PlaySync()",
+        "} catch { $soundFailed = $true } finally { if ($player) { $player.Dispose() } }",
+      ] : []),
       ...(config.notification ? [
         "Add-Type -AssemblyName System.Windows.Forms",
         "Add-Type -AssemblyName System.Drawing",
@@ -74,24 +93,25 @@ async function notify(title, message, config) {
         "$icon.ShowBalloonTip(5000, $data.title, $data.message, [System.Windows.Forms.ToolTipIcon]::None)",
         "Start-Sleep -Seconds 5",
         "} finally { $icon.Dispose() }",
-      ] : ["Start-Sleep -Milliseconds 500"]),
+      ] : []),
+      "if ($soundFailed) { exit 1 }",
     ].join("\n");
     const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
       "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
-    let ok = await run("powershell.exe", args);
-    if (!ok && os.platform() === "linux") {
-      ok = await run("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", args);
+    let result = await run("powershell.exe", args);
+    if (result.code === "ENOENT" && os.platform() === "linux") {
+      result = await run("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", args);
     }
-    return ok;
+    return result.ok && (!soundFile || Boolean(windowsSound));
   } else {
     // Optional ordinary Linux support; these commands are not needed on WSL.
     if (config.notification) results.push(run("notify-send", ["--", title, message]));
-    if (config.sound) results.push(run("canberra-gtk-play", ["-i", "message-new-instant"]));
+    if (soundFile) results.push(run("canberra-gtk-play", ["-f", soundFile]));
   }
-  return (await Promise.all(results)).every(Boolean);
+  return (await Promise.all(results)).every((result) => result.ok);
 }
 
-/** A single-file OpenCode plugin. No SDK import or runtime npm dependencies. */
+/** An OpenCode plugin with bundled sounds. No SDK import or runtime npm dependencies. */
 export default async function CacheBellPlugin({ client, directory }, options) {
   const log = (message) => {
     try {
