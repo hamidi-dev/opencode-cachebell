@@ -12,13 +12,14 @@ Add to `plugin` in `~/.config/opencode/opencode.json`, keeping your other entrie
 
 ```json
 {
-  "plugin": ["opencode-cachebell@0.2.0"]
+  "plugin": ["opencode-cachebell@0.3.0"]
 }
 ```
 
 **Restart OpenCode.** It installs the package automatically.
 
-Supports macOS and WSL, with best-effort native Windows and Linux desktop support.
+Works with OpenCode 1 and OpenCode 2 from the same package. Supports macOS and
+WSL, with best-effort native Windows and Linux desktop support.
 
 ## Sounds
 
@@ -34,7 +35,7 @@ To choose a sound, replace the plugin entry with:
 
 ```json
 {
-  "plugin": [["opencode-cachebell@0.2.0", { "sound": "chime" }]]
+  "plugin": [["opencode-cachebell@0.3.0", { "sound": "chime" }]]
 }
 ```
 

@@ -23,7 +23,7 @@ async function setup(t, { config, platform = "darwin", release = "", get,
     callback(fail(command) ? Object.assign(new Error("not available"), { code: failureCode }) : null,
       command === "wslpath" ? "\\\\wsl.localhost\\Ubuntu\\home\\User Name\\sounds\\pulse.wav\n" : "");
   });
-  const hooks = await plugin({
+  const hooks = await plugin.server({
     directory: "/projects/example",
     client: {
       session: { get: get || (async ({ path }) => ({ data: { id: path.id, title: "Resumed" } })) },
@@ -398,4 +398,224 @@ test("bundled sounds are short, non-clipping PCM WAVs usable by Windows SoundPla
     }
     assert.ok(peak > 1000 && peak < 20000);
   }
+});
+
+// --- OpenCode 2 ------------------------------------------------------------
+//
+// The same state machine, driven through the version 2 surface: a model.request
+// hook instead of chat.headers, an event stream instead of an event hook, and a
+// session lookup that also reports which directory a session belongs to.
+
+function stream() {
+  const queued = [];
+  let waiting;
+  return {
+    push(event) {
+      if (waiting) {
+        const resolve = waiting;
+        waiting = undefined;
+        resolve({ value: event, done: false });
+        return;
+      }
+      queued.push(event);
+    },
+    iterable: {
+      [Symbol.asyncIterator]: () => ({
+        next: () => queued.length
+          ? Promise.resolve({ value: queued.shift(), done: false })
+          : new Promise((resolve) => { waiting = resolve; }),
+        return: () => Promise.resolve({ value: undefined, done: true }),
+      }),
+    },
+  };
+}
+
+async function setupV2(t, { config, directory = "/projects/example", get } = {}) {
+  t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: NOW });
+  t.mock.method(os, "platform", () => "darwin");
+  t.mock.method(os, "release", () => "");
+  const calls = [];
+  const logs = [];
+  t.mock.method(childProcess, "execFile", (command, args, options, callback) => {
+    calls.push({ command, args, options });
+    callback(null, "");
+  });
+  t.mock.method(console, "warn", (message) => { logs.push(message); });
+
+  const events = stream();
+  const hooks = {};
+  const cleanup = await plugin.setup({
+    options: config,
+    location: { directory },
+    session: {
+      get: get || (async ({ sessionID }) => ({
+        id: sessionID, title: "Resumed", location: { directory },
+      })),
+      hook: async (name, handler) => { hooks[name] = handler; },
+    },
+    event: { subscribe: () => events.iterable },
+  });
+  t.after(() => cleanup?.());
+  await flush();
+
+  const emit = async (type, data) => { events.push({ type, data }); await flush(); };
+  const request = async (model = claude, sessionID = "root", kind = "primary") => {
+    // A disabled plugin registers no hook; the callers still drive the sequence.
+    await hooks["model.request"]?.({ sessionID, model, kind, agent: "build", headers: {} });
+    await flush();
+  };
+  const cached = (sessionID = "root", cache = { read: 100, write: 0 }) =>
+    emit("session.usage.updated", { sessionID, tokens: { cache } });
+  const idle = (sessionID = "root") => emit("session.execution.succeeded", { sessionID });
+  const advance = async (ms) => { t.mock.timers.tick(ms); await flush(); };
+  const notifications = () => calls.filter((call) => call.command === "osascript");
+  return { calls, logs, emit, request, cached, idle, advance, notifications };
+}
+
+test("OpenCode 2: a confirmed Claude window rings two minutes before it closes", async (t) => {
+  const s = await setupV2(t);
+  await s.emit("session.created", {
+    sessionID: "root", title: "Root", location: { directory: "/projects/example" },
+  });
+  await s.request();
+  await s.cached();
+  await s.idle();
+  await s.advance(179_000);
+  assert.equal(s.notifications().length, 0);
+  await s.advance(1_000);
+  assert.equal(s.notifications().length, 1);
+  assert.match(s.notifications()[0].args.at(-1), /claude-sonnet-4-6: ~2m 0s cache window remaining/);
+  // Once per window, not once per timer tick.
+  await s.advance(60_000);
+  assert.equal(s.notifications().length, 1);
+});
+
+test("OpenCode 2: an unconfirmed window stays silent", async (t) => {
+  const s = await setupV2(t);
+  await s.emit("session.created", {
+    sessionID: "root", location: { directory: "/projects/example" },
+  });
+  await s.request();
+  await s.idle();
+  await s.advance(600_000);
+  assert.equal(s.notifications().length, 0);
+});
+
+test("OpenCode 2: auxiliary requests never arm a window", async (t) => {
+  const s = await setupV2(t);
+  await s.emit("session.created", {
+    sessionID: "root", location: { directory: "/projects/example" },
+  });
+  for (const kind of ["title", "compaction", "generate"]) await s.request(claude, "root", kind);
+  await s.cached();
+  await s.idle();
+  await s.advance(600_000);
+  assert.equal(s.notifications().length, 0);
+});
+
+test("OpenCode 2: only the instance owning the session rings", async (t) => {
+  // Version 2 runs one plugin instance per location against one shared event
+  // stream, so every other instance must ignore this session entirely.
+  const s = await setupV2(t, { directory: "/projects/other" });
+  await s.emit("session.created", {
+    sessionID: "root", location: { directory: "/projects/example" },
+  });
+  await s.request();
+  await s.cached();
+  await s.idle();
+  await s.advance(600_000);
+  assert.equal(s.notifications().length, 0);
+});
+
+test("OpenCode 2: subagent sessions never ring", async (t) => {
+  const s = await setupV2(t);
+  await s.emit("session.created", {
+    sessionID: "child", parentID: "root", location: { directory: "/projects/example" },
+  });
+  await s.request(claude, "child");
+  await s.cached("child");
+  await s.idle("child");
+  await s.advance(600_000);
+  assert.equal(s.notifications().length, 0);
+});
+
+test("OpenCode 2: work defers the bell, and a modern OpenAI window is longer", async (t) => {
+  const s = await setupV2(t);
+  await s.emit("session.created", {
+    sessionID: "root", title: "Root", location: { directory: "/projects/example" },
+  });
+  await s.request(gpt);
+  await s.cached();
+  // Still working when the warning would have been due.
+  await s.emit("session.execution.started", { sessionID: "root" });
+  await s.advance(1_700_000);
+  assert.equal(s.notifications().length, 0);
+  await s.idle();
+  await s.advance(0);
+  assert.equal(s.notifications().length, 1);
+  assert.match(s.notifications()[0].args.at(-1), /gpt-6-astra: ~1m 40s cache window remaining/);
+});
+
+test("OpenCode 2: someone at the keyboard is not told about their own window", async (t) => {
+  const s = await setupV2(t);
+  await s.emit("session.created", {
+    sessionID: "root", location: { directory: "/projects/example" },
+  });
+  await s.request();
+  await s.cached();
+  await s.emit("permission.asked", { sessionID: "root" });
+  await s.advance(600_000);
+  assert.equal(s.notifications().length, 0);
+});
+
+for (const type of ["session.execution.interrupted", "session.execution.failed"]) {
+  test(`OpenCode 2: ${type} abandons the window`, async (t) => {
+    const s = await setupV2(t);
+    await s.emit("session.created", {
+      sessionID: "root", location: { directory: "/projects/example" },
+    });
+    await s.request();
+    await s.cached();
+    await s.emit(type, { sessionID: "root" });
+    await s.idle();
+    await s.advance(600_000);
+    assert.equal(s.notifications().length, 0);
+  });
+}
+
+test("OpenCode 2: a resumed session is resolved through the session lookup", async (t) => {
+  const s = await setupV2(t, {
+    get: async ({ sessionID }) => ({
+      id: sessionID, title: "Resumed", location: { directory: "/projects/example" },
+    }),
+  });
+  await s.request();
+  await s.cached();
+  await s.idle();
+  await s.advance(180_000);
+  assert.equal(s.notifications().length, 1);
+  assert.match(s.notifications()[0].args.at(-1), /Resumed - claude-sonnet-4-6/);
+});
+
+test("OpenCode 2: invalid options disable the plugin without breaking OpenCode", async (t) => {
+  const s = await setupV2(t, { config: { warningSeconds: -1 } });
+  await s.request();
+  await s.cached();
+  await s.idle();
+  await s.advance(600_000);
+  assert.equal(s.notifications().length, 0);
+  assert.match(s.logs.join("\n"), /Invalid CacheBell configuration/);
+});
+
+test("OpenCode 2: a rename never adopts a session this instance does not own", async (t) => {
+  const s = await setupV2(t, { directory: "/projects/other" });
+  await s.emit("session.created", {
+    sessionID: "root", location: { directory: "/projects/example" },
+  });
+  await s.request();
+  await s.cached();
+  await s.emit("session.renamed", { sessionID: "root", title: "Renamed" });
+  await s.idle();
+  await s.advance(600_000);
+  assert.equal(s.notifications().length, 0);
 });

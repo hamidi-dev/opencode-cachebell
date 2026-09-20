@@ -111,24 +111,14 @@ async function notify(title, message, config) {
   return (await Promise.all(results)).every((result) => result.ok);
 }
 
-/** An OpenCode plugin with bundled sounds. No SDK import or runtime npm dependencies. */
-export default async function CacheBellPlugin({ client, directory }, options) {
-  const log = (message) => {
-    try {
-      Promise.resolve(client.app?.log?.({ body: {
-        service: "cachebell", level: "warn", message,
-      } })).catch(() => {});
-    } catch { /* A notification must never interrupt the agent. */ }
-  };
-  let config;
-  try {
-    config = settings(options);
-  } catch {
-    log("Invalid CacheBell configuration; plugin disabled. Check OPENCODE_CACHEBELL/options.");
-    return {};
-  }
-  if (!config.sound && !config.notification) return {};
-
+/**
+ * The plugin's state machine, shared by both OpenCode generations.
+ *
+ * `host` is the thin layer that differs between them: how a session is looked
+ * up, and how a warning is logged. Everything else -- when a cache window
+ * starts, when it is confirmed, and when the bell is due -- is the same.
+ */
+function createBell(config, directory, host) {
   const sessions = new Map();
   const deleted = new Set();
   let disposed = false;
@@ -157,8 +147,8 @@ export default async function CacheBellPlugin({ client, directory }, options) {
       const title = `CacheBell - ${project}`;
       const message = `${state.title || state.id} - ${request.model}: ~${time} cache window remaining`;
       void notify(title, message, config).then((ok) => {
-        if (!ok) log("A CacheBell sound/notification failed. Check OS notification permissions and platform commands.");
-      }).catch(() => log("CacheBell notification failed."));
+        if (!ok) host.log("A CacheBell sound/notification failed. Check OS notification permissions and platform commands.");
+      }).catch(() => host.log("CacheBell notification failed."));
       return;
     }
     // Recheck wall time after sleep/clock changes instead of playing stale alarms.
@@ -167,94 +157,272 @@ export default async function CacheBellPlugin({ client, directory }, options) {
   }
 
   function metadata(state, info) {
-    state.root = !info.parentID;
+    // A session belongs to exactly one directory. OpenCode 2 runs one plugin
+    // instance per location against one shared event stream, so without this
+    // every instance would ring for the same window.
+    const owned = !info.directory || !directory || info.directory === directory;
+    state.root = owned && !info.parentID;
     state.title = info.title;
     schedule(state);
   }
 
-  const dispose = async () => {
-    disposed = true;
-    for (const state of sessions.values()) cancel(state);
-    sessions.clear();
-  };
+  function lookup(state) {
+    // Resumed sessions need ancestry lookup. Do not block model dispatch on it.
+    if (state.root !== undefined || state.lookup) return;
+    state.lookup = true;
+    Promise.resolve(host.session(state.id))
+      .then((info) => {
+        if (!disposed && sessions.get(state.id) === state && info) metadata(state, info);
+      })
+      .catch(() => {})
+      .finally(() => { state.lookup = false; });
+  }
 
   return {
-    "chat.headers": async (input) => {
-      if (disposed || deleted.has(input.sessionID) || BACKGROUND_AGENTS.has(input.agent)) return;
-      const state = stateFor(input.sessionID);
+    /** A model request started: a fresh cache window, if the model has one. */
+    request(sessionID, model) {
+      if (disposed || deleted.has(sessionID)) return;
+      const state = stateFor(sessionID);
       cancel(state);
       state.status = "busy";
-      const ttl = cacheTTL(input.model, config);
+      const ttl = cacheTTL(model, config);
       state.request = ttl > 0 ? {
         started: Date.now(),
         deadline: Date.now() + ttl,
         messageID: state.messageID,
-        model: input.model.id,
+        model: model.id,
       } : undefined;
-      if (state.root === undefined && !state.lookup) {
-        // Resumed sessions need ancestry lookup. Do not block model dispatch on it.
-        state.lookup = true;
-        Promise.resolve().then(() => client.session.get({ path: { id: state.id } }))
-          .then(({ data }) => {
-            if (!disposed && sessions.get(state.id) === state && data) metadata(state, data);
-          }).catch(() => {}).finally(() => { state.lookup = false; });
+      lookup(state);
+    },
+    /** Only reported cache reads/writes confirm a window worth warning about. */
+    confirm(sessionID, cache) {
+      if (disposed || deleted.has(sessionID)) return;
+      const state = sessions.get(sessionID);
+      const request = state?.request;
+      if (!request || request.notified) return;
+      if (!(cache?.read > 0 || cache?.write > 0)) return;
+      request.confirmed = true;
+      schedule(state);
+    },
+    /** The window only counts down while nobody is working in the session. */
+    status(sessionID, status) {
+      if (disposed) return;
+      const state = sessions.get(sessionID);
+      if (!state) return;
+      state.status = status;
+      schedule(state);
+    },
+    /** A failed or interrupted run leaves no window to warn about. */
+    abandon(sessionID) {
+      const state = sessions.get(sessionID);
+      if (!state) return;
+      cancel(state);
+      state.request = undefined;
+    },
+    info(sessionID, info) {
+      if (disposed || deleted.has(sessionID)) return;
+      metadata(stateFor(sessionID), info);
+    },
+    /** A title change says nothing about ancestry or ownership; only relabel. */
+    rename(sessionID, title) {
+      const state = sessions.get(sessionID);
+      if (disposed || !state) return;
+      state.title = title;
+    },
+    remove(sessionID) {
+      deleted.add(sessionID);
+      const state = sessions.get(sessionID);
+      if (state) cancel(state);
+      sessions.delete(sessionID);
+    },
+    /** Assistant message bookkeeping, OpenCode 1 only. */
+    message(sessionID, id) {
+      if (disposed || deleted.has(sessionID)) return;
+      stateFor(sessionID).messageID = id;
+    },
+    matches(sessionID, info) {
+      const request = sessions.get(sessionID)?.request;
+      return Boolean(request) &&
+        (!request.messageID || request.messageID === info.id) &&
+        info.modelID === request.model &&
+        info.completed >= request.started;
+    },
+    dispose() {
+      disposed = true;
+      for (const state of sessions.values()) cancel(state);
+      sessions.clear();
+    },
+  };
+}
+
+/** OpenCode 2 entrypoint: a plugin definition with an id and a setup function. */
+async function setup(ctx) {
+  let config;
+  const log = (message) => {
+    try {
+      console.warn(`cachebell: ${message}`);
+    } catch { /* A notification must never interrupt the agent. */ }
+  };
+  try {
+    config = settings(ctx.options);
+  } catch {
+    log("Invalid CacheBell configuration; plugin disabled. Check OPENCODE_CACHEBELL/options.");
+    return;
+  }
+  if (!config.sound && !config.notification) return;
+
+  const directory = ctx.location?.directory;
+  const bell = createBell(config, directory, {
+    log,
+    session: async (sessionID) => {
+      const info = await ctx.session.get({ sessionID });
+      return info && {
+        id: info.id,
+        parentID: info.parentID,
+        title: info.title,
+        directory: info.location?.directory,
+      };
+    },
+  });
+
+  await ctx.session.hook("model.request", (event) => {
+    // Titles, summaries and compactions are the agent's own bookkeeping; only
+    // a primary request is a cache window the user is sitting on.
+    if (event.kind !== "primary") return;
+    bell.request(event.sessionID, event.model);
+  });
+
+  const controller = new AbortController();
+  void (async () => {
+    try {
+      for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+        const data = event.data ?? {};
+        switch (event.type) {
+          case "session.usage.updated":
+            bell.confirm(data.sessionID, data.tokens?.cache);
+            break;
+          case "session.execution.started":
+            bell.status(data.sessionID, "busy");
+            break;
+          case "session.execution.succeeded":
+            bell.status(data.sessionID, "idle");
+            break;
+          case "session.execution.failed":
+          case "session.execution.interrupted":
+            bell.abandon(data.sessionID);
+            break;
+          // Someone at the keyboard does not need a bell.
+          case "permission.asked":
+          case "form.created":
+            bell.status(data.sessionID, "waiting");
+            break;
+          case "session.created":
+            bell.info(data.sessionID, {
+              id: data.sessionID,
+              parentID: data.parentID,
+              title: data.title,
+              directory: data.location?.directory,
+            });
+            break;
+          case "session.renamed":
+            bell.rename(data.sessionID, data.title);
+            break;
+          case "session.deleted":
+            bell.remove(data.sessionID);
+            break;
+          default:
+            break;
+        }
       }
+    } catch {
+      // The stream ends with the plugin.
+    }
+  })();
+
+  return () => {
+    controller.abort();
+    bell.dispose();
+  };
+}
+
+/** OpenCode 1 entrypoint, kept so one package serves both generations. */
+async function server({ client, directory }, options) {
+  const log = (message) => {
+    try {
+      Promise.resolve(client.app?.log?.({ body: {
+        service: "cachebell", level: "warn", message,
+      } })).catch(() => {});
+    } catch { /* A notification must never interrupt the agent. */ }
+  };
+  let config;
+  try {
+    config = settings(options);
+  } catch {
+    log("Invalid CacheBell configuration; plugin disabled. Check OPENCODE_CACHEBELL/options.");
+    return {};
+  }
+  if (!config.sound && !config.notification) return {};
+
+  const bell = createBell(config, directory, {
+    log,
+    session: async (id) => {
+      const { data } = await client.session.get({ path: { id } });
+      return data && { id: data.id, parentID: data.parentID, title: data.title };
+    },
+  });
+
+  return {
+    "chat.headers": async (input) => {
+      if (BACKGROUND_AGENTS.has(input.agent)) return;
+      bell.request(input.sessionID, input.model);
     },
     event: async ({ event }) => {
-      if (disposed) return;
       const p = event.properties;
       if (event.type === "server.instance.disposed") {
-        if (!p.directory || p.directory === directory) await dispose();
+        if (!p.directory || p.directory === directory) bell.dispose();
         return;
       }
       if (event.type === "session.deleted") {
-        deleted.add(p.info.id);
-        const state = sessions.get(p.info.id);
-        if (state) cancel(state);
-        sessions.delete(p.info.id);
+        bell.remove(p.info.id);
         return;
       }
       if (event.type === "session.created" || event.type === "session.updated") {
-        if (deleted.has(p.info.id)) return;
-        metadata(stateFor(p.info.id), p.info);
+        bell.info(p.info.id, p.info);
         return;
       }
       if (event.type === "message.updated") {
         const info = p.info;
-        if (deleted.has(info.sessionID)) return;
         if (info.role !== "assistant" || info.summary || BACKGROUND_AGENTS.has(info.agent)) return;
-        const state = stateFor(info.sessionID);
         if (!info.time.completed) {
-          state.messageID = info.id;
+          bell.message(info.sessionID, info.id);
           return;
         }
-        const request = state.request;
-        if (!request || (request.messageID && request.messageID !== info.id) ||
-            info.modelID !== request.model || info.time.completed < request.started) return;
+        if (!bell.matches(info.sessionID, {
+          id: info.id, modelID: info.modelID, completed: info.time.completed,
+        })) return;
         if (info.error) {
-          cancel(state);
-          state.request = undefined;
+          bell.abandon(info.sessionID);
           return;
         }
-        // Only reported cache reads/writes confirm a useful window. Completion
-        // may follow slow tools; it must never move the request-start deadline.
-        const cache = info.tokens?.cache;
-        request.confirmed = (cache?.read > 0 || cache?.write > 0);
-        schedule(state);
+        // Completion may follow slow tools; it must never move the deadline.
+        bell.confirm(info.sessionID, info.tokens?.cache);
         return;
       }
       if (event.type === "session.status" || event.type === "session.idle" ||
           event.type === "permission.asked" || event.type === "question.asked") {
-        const state = sessions.get(p.sessionID);
-        if (!state) return;
-        state.status = event.type === "session.idle" ? "idle" :
-          event.type === "session.status" ? p.status.type : "waiting";
-        schedule(state);
+        bell.status(p.sessionID, event.type === "session.idle" ? "idle" :
+          event.type === "session.status" ? p.status.type : "waiting");
       }
     },
-    dispose,
+    dispose: async () => bell.dispose(),
   };
 }
+
+/**
+ * One package, both OpenCode generations: version 2 reads `id` and `setup`,
+ * version 1 calls `server()` and ignores the rest.
+ */
+export default { id: "cachebell", setup, server };
 
 // Smoke-test native delivery without an API request or an OpenCode session.
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url &&

@@ -35,9 +35,12 @@ to avoid duplicate notifications. No build or `npm install` is required.
 | GPT-5.6 and later, including GPT-6 | 30 minutes | 28 minutes |
 | Older GPT models / unknown models | Disabled | Configure an explicit override |
 
-The plugin records `chat.headers` for each conversational LLM request, including
-tool-loop requests and OpenCode-managed retries. A successful completed assistant
-message with **reported cache reads or writes** confirms the estimate. The timer
+The plugin records every conversational LLM request, including tool-loop
+requests and OpenCode-managed retries: `chat.headers` on OpenCode 1, the
+`model.request` session hook on OpenCode 2. Titles, summaries and compactions
+are excluded, since nobody is waiting on them. **Reported cache reads or writes**
+confirm the estimate — from the completed assistant message on OpenCode 1, from
+`session.usage.updated` on OpenCode 2. The timer
 is anchored to request preparation, **never** to response completion or tool
 completion. This is an approximation of provider request arrival, not a
 transport-level timestamp.
