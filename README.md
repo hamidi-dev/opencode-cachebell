@@ -23,23 +23,30 @@ WSL, with best-effort native Windows and Linux desktop support.
 
 ## Sounds
 
-Three original sounds are included:
+Five sounds are included:
 
 | Sound | Style |
 | --- | --- |
 | **Pulse** (default) | Short, rising electronic signal |
 | Chime | Two warm bell notes |
 | Knock | Soft, woody double-tap |
+| Sheep Field | Real, 2.5-second field bleat |
+| Sheep Close | Real, 1.36-second close-up bleat |
 
 To choose a sound, replace the plugin entry with:
 
 ```json
 {
-  "plugin": [["opencode-cachebell@0.3.0", { "sound": "chime" }]]
+  "plugin": [["opencode-cachebell@0.3.0", { "sound": "sheep-close" }]]
 }
 ```
 
-Use `"pulse"`, `"chime"`, `"knock"`, or `false` for silence. Restart after changes.
+Use `"pulse"`, `"chime"`, `"knock"`, `"sheep-field"`, `"sheep-close"`, or `false` for silence.
+`"sheep"` remains an alias for `"sheep-field"`. Restart after changes.
+
+Sheep Field is an excerpt of a [public-domain recording by earthcalling](https://commons.wikimedia.org/wiki/File:Sheep_bleating.ogg).
+Sheep Close is a [CC0 recording by TheKingOfGeeks360](https://freesound.org/people/TheKingOfGeeks360/sounds/803460/),
+converted from its publicly available high-quality MP3 preview. Both are mono PCM WAVs for desktop playback.
 
 ## Timing
 

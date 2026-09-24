@@ -15,7 +15,7 @@ function settings(options = {}) {
     ...JSON.parse(process.env.OPENCODE_CACHEBELL || "{}"),
   };
   if (!Number.isFinite(config.warningSeconds) || config.warningSeconds <= 0 ||
-      ![true, false, "pulse", "chime", "knock"].includes(config.sound) ||
+      ![true, false, "pulse", "chime", "knock", "sheep", "sheep-close", "sheep-field"].includes(config.sound) ||
       typeof config.notification !== "boolean" ||
       !config.ttlSeconds || typeof config.ttlSeconds !== "object" ||
       Array.isArray(config.ttlSeconds) ||
@@ -51,7 +51,7 @@ function run(command, args) {
 async function notify(title, message, config) {
   if (!config.sound && !config.notification) return true;
   const soundFile = config.sound ? fileURLToPath(new URL(
-    `./sounds/${config.sound === true ? "pulse" : config.sound}.wav`, import.meta.url,
+    `./sounds/${config.sound === true ? "pulse" : config.sound === "sheep" ? "sheep-field" : config.sound}.wav`, import.meta.url,
   )) : undefined;
   const results = [];
   if (os.platform() === "darwin") {

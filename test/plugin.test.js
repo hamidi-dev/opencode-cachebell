@@ -293,7 +293,7 @@ test("invalid options disable the plugin without breaking OpenCode", async (t) =
   assert.equal(s.logs.length, 1);
 });
 
-for (const sound of ["pulse", "chime", "knock", true, false]) {
+for (const sound of ["pulse", "chime", "knock", "sheep", "sheep-close", "sheep-field", true, false]) {
   test(`macOS sound selection: ${sound}`, async (t) => {
     const s = await setup(t, { config: { sound } });
     await s.create();
@@ -306,7 +306,7 @@ for (const sound of ["pulse", "chime", "knock", true, false]) {
     } else {
       assert.equal(s.calls[1].command, "afplay");
       assert.equal(s.calls[1].args[0], fileURLToPath(new URL(
-        `../sounds/${sound === true ? "pulse" : sound}.wav`, import.meta.url,
+         `../sounds/${sound === true ? "pulse" : sound === "sheep" ? "sheep-field" : sound}.wav`, import.meta.url,
       )));
     }
   });
@@ -378,8 +378,8 @@ test("PowerShell runtime failures do not retry and duplicate notifications", asy
   assert.equal(s.logs.length, 1);
 });
 
-test("bundled sounds are short, non-clipping PCM WAVs usable by Windows SoundPlayer", () => {
-  for (const sound of ["pulse", "chime", "knock"]) {
+test("bundled sounds are non-clipping PCM WAVs usable by Windows SoundPlayer", () => {
+  for (const sound of ["pulse", "chime", "knock", "sheep-close", "sheep-field"]) {
     const wav = readFileSync(new URL(`../sounds/${sound}.wav`, import.meta.url));
     assert.equal(wav.toString("ascii", 0, 4), "RIFF");
     assert.equal(wav.readUInt32LE(4), wav.length - 8);
@@ -391,7 +391,7 @@ test("bundled sounds are short, non-clipping PCM WAVs usable by Windows SoundPla
     assert.equal(wav.readUInt16LE(34), 16);
     assert.equal(wav.toString("ascii", 36, 40), "data");
     assert.equal(wav.readUInt32LE(40), wav.length - 44);
-    assert.ok((wav.length - 44) / 88200 <= 1);
+    assert.ok((wav.length - 44) / 88200 <= (sound.startsWith("sheep-") ? 3 : 1));
     let peak = 0;
     for (let offset = 44; offset < wav.length; offset += 2) {
       peak = Math.max(peak, Math.abs(wav.readInt16LE(offset)));

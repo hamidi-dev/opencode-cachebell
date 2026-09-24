@@ -109,7 +109,7 @@ cache policy. It cannot infer TTLs on individual cache breakpoints.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `warningSeconds` | `120` | Lead time; positive number. If longer than the TTL, warn as soon as an eligible session becomes idle. |
-| `sound` | `"pulse"` | Bundled `"pulse"`, `"chime"`, or `"knock"`. `true` uses Pulse; `false` disables sound. |
+| `sound` | `"pulse"` | Bundled `"pulse"`, `"chime"`, `"knock"`, `"sheep-field"`, or `"sheep-close"`. `"sheep"` aliases Sheep Field; `true` uses Pulse; `false` disables sound. |
 | `notification` | `true` | Show the platform notification. Set both booleans to false to disable the plugin. |
 | `ttlSeconds` | `{}` | Override TTL by `providerID/modelID`, API model ID, or provider ID, in that precedence order. `0` disables a match. |
 
@@ -159,10 +159,15 @@ subagents, resumed sessions, errors, sleep, disposal, and platform command
 construction. Windows/WSL command tests are not a substitute for testing actual
 desktop delivery on those systems.
 
-The original sounds are synthesized by `scripts/generate-sounds.mjs` and are
+Pulse, Chime, and Knock are synthesized by `scripts/generate-sounds.mjs` and are
 covered by the MIT license. Run `npm run sounds:generate` to reproduce them.
-The npm package includes the resulting mono, 44.1 kHz, 16-bit PCM WAV files;
-users do not run the generator. Each sound is under one second with a -5.2 dBFS
-peak ceiling. Custom audio files are not currently supported.
+Sheep Field is a 2.5-second excerpt of a [public-domain field recording](https://commons.wikimedia.org/wiki/File:Sheep_bleating.ogg)
+by earthcalling. Sheep Close is a 1.36-second [CC0 recording](https://freesound.org/people/TheKingOfGeeks360/sounds/803460/)
+by TheKingOfGeeks360, converted from the public high-quality MP3 preview. The
+generator does not overwrite either recording.
+The npm package includes mono, 44.1 kHz, 16-bit PCM WAV files; users do not
+run the generator. The synthesized sounds are under one second; the sheep clips
+are 1.36 and 2.5 seconds. Each has a -5.2 dBFS peak ceiling. Custom audio files are not currently
+supported.
 
 MIT licensed.
