@@ -293,7 +293,7 @@ test("invalid options disable the plugin without breaking OpenCode", async (t) =
   assert.equal(s.logs.length, 1);
 });
 
-for (const sound of ["pulse", "chime", "knock", "sheep", "sheep-close", "sheep-field", true, false]) {
+for (const sound of ["pulse", "chime", "knock", "sheep", "sheep-close", "sheep-field", "cat-meow", "rooster-crow", "horse-neigh", "cow-moo", true, false]) {
   test(`macOS sound selection: ${sound}`, async (t) => {
     const s = await setup(t, { config: { sound } });
     await s.create();
@@ -379,7 +379,7 @@ test("PowerShell runtime failures do not retry and duplicate notifications", asy
 });
 
 test("bundled sounds are non-clipping PCM WAVs usable by Windows SoundPlayer", () => {
-  for (const sound of ["pulse", "chime", "knock", "sheep-close", "sheep-field"]) {
+  for (const sound of ["pulse", "chime", "knock", "sheep-close", "sheep-field", "cat-meow", "rooster-crow", "horse-neigh", "cow-moo"]) {
     const wav = readFileSync(new URL(`../sounds/${sound}.wav`, import.meta.url));
     assert.equal(wav.toString("ascii", 0, 4), "RIFF");
     assert.equal(wav.readUInt32LE(4), wav.length - 8);
@@ -391,12 +391,21 @@ test("bundled sounds are non-clipping PCM WAVs usable by Windows SoundPlayer", (
     assert.equal(wav.readUInt16LE(34), 16);
     assert.equal(wav.toString("ascii", 36, 40), "data");
     assert.equal(wav.readUInt32LE(40), wav.length - 44);
-    assert.ok((wav.length - 44) / 88200 <= (sound.startsWith("sheep-") ? 3 : 1));
+    const maxDuration = sound === "rooster-crow" ? 4 :
+      sound.startsWith("sheep-") || ["cat-meow", "cow-moo"].includes(sound) ? 3 :
+      sound === "horse-neigh" ? 1.5 : 1;
+    assert.ok((wav.length - 44) / 88200 <= maxDuration);
     let peak = 0;
     for (let offset = 44; offset < wav.length; offset += 2) {
       peak = Math.max(peak, Math.abs(wav.readInt16LE(offset)));
     }
     assert.ok(peak > 1000 && peak < 20000);
+    if (sound.startsWith("sheep-")) {
+      assert.ok(peak >= 7000 && peak < 10000, `${sound} should remain quieter than the other sounds`);
+    }
+    if (["cat-meow", "rooster-crow", "horse-neigh", "cow-moo"].includes(sound)) {
+      assert.ok(peak >= 4000 && peak < 10000, `${sound} should have a quiet but audible peak`);
+    }
   }
 });
 

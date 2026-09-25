@@ -1,5 +1,5 @@
 // Original CacheBell sounds, synthesized from scratch under the project's MIT license.
-// The sheep recordings are bundled separately; do not overwrite them here.
+// The animal recordings are bundled separately; do not overwrite them here.
 // Development-only generator; the plugin will play the resulting PCM WAV files.
 import { mkdirSync, writeFileSync } from "node:fs";
 

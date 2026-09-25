@@ -109,7 +109,7 @@ cache policy. It cannot infer TTLs on individual cache breakpoints.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `warningSeconds` | `120` | Lead time; positive number. If longer than the TTL, warn as soon as an eligible session becomes idle. |
-| `sound` | `"pulse"` | Bundled `"pulse"`, `"chime"`, `"knock"`, `"sheep-field"`, or `"sheep-close"`. `"sheep"` aliases Sheep Field; `true` uses Pulse; `false` disables sound. |
+| `sound` | `"pulse"` | Bundled `"pulse"`, `"chime"`, `"knock"`, `"sheep-field"`, `"sheep-close"`, `"cat-meow"`, `"rooster-crow"`, `"horse-neigh"`, or `"cow-moo"`. `"sheep"` aliases Sheep Field; `true` uses Pulse; `false` disables sound. |
 | `notification` | `true` | Show the platform notification. Set both booleans to false to disable the plugin. |
 | `ttlSeconds` | `{}` | Override TTL by `providerID/modelID`, API model ID, or provider ID, in that precedence order. `0` disables a match. |
 
@@ -164,10 +164,19 @@ covered by the MIT license. Run `npm run sounds:generate` to reproduce them.
 Sheep Field is a 2.5-second excerpt of a [public-domain field recording](https://commons.wikimedia.org/wiki/File:Sheep_bleating.ogg)
 by earthcalling. Sheep Close is a 1.36-second [CC0 recording](https://freesound.org/people/TheKingOfGeeks360/sounds/803460/)
 by TheKingOfGeeks360, converted from the public high-quality MP3 preview. The
-generator does not overwrite either recording.
+Cat Meow is excerpted from a [public-domain recording by Heismark](https://commons.wikimedia.org/wiki/File:Meow_of_a_pleading_cat.oga)
+(3.65–5.0 seconds); Rooster Crow from a [public-domain recording by alys](https://commons.wikimedia.org/wiki/File:Medium_rooster_crowing.ogg)
+(2.4–5.7 seconds). Both were converted to mono PCM with short edge fades and
+attenuated to peaks of -11.2 and -16 dBFS respectively. The generator does not
+overwrite the animal recordings.
+Horse Neigh is converted from a [CC0 recording by Joseph Sardin](https://bigsoundbank.com/horse-neighing-4-s1541.html)
+(1.1 seconds, peak -14 dBFS). Cow Moo is excerpted from a [CC0 recording by Joseph Sardin](https://bigsoundbank.com/cow-moos-2-s2382.html)
+(0.55–2.5 seconds, peak -16 dBFS). Both use the same mono PCM conversion and
+short edge fades.
 The npm package includes mono, 44.1 kHz, 16-bit PCM WAV files; users do not
-run the generator. The synthesized sounds are under one second; the sheep clips
-are 1.36 and 2.5 seconds. Each has a -5.2 dBFS peak ceiling. Custom audio files are not currently
-supported.
+run the generator. The synthesized sounds are under one second and peak at
+-5.2 dBFS. The sheep clips are 1.36 and 2.5 seconds; their samples have been
+halved (about -6 dB) to keep the longer bleats quieter, with peaks near
+-11.2 dBFS. Custom audio files are not currently supported.
 
 MIT licensed.

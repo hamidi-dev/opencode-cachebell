@@ -15,7 +15,7 @@ function settings(options = {}) {
     ...JSON.parse(process.env.OPENCODE_CACHEBELL || "{}"),
   };
   if (!Number.isFinite(config.warningSeconds) || config.warningSeconds <= 0 ||
-      ![true, false, "pulse", "chime", "knock", "sheep", "sheep-close", "sheep-field"].includes(config.sound) ||
+      ![true, false, "pulse", "chime", "knock", "sheep", "sheep-close", "sheep-field", "cat-meow", "rooster-crow", "horse-neigh", "cow-moo"].includes(config.sound) ||
       typeof config.notification !== "boolean" ||
       !config.ttlSeconds || typeof config.ttlSeconds !== "object" ||
       Array.isArray(config.ttlSeconds) ||
