@@ -94,7 +94,7 @@ OpenCode versions supporting plugin option tuples can also use:
 ```json
 {
   "plugin": [
-    ["opencode-cachebell@0.4.0", {
+    ["opencode-cachebell@0.5.0", {
       "warningSeconds": 120,
       "ttlSeconds": { "anthropic": 3600 }
     }]

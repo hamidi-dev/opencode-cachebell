@@ -1,6 +1,6 @@
 {
   "name": "opencode-cachebell",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "license": "MIT",
   "description": "Native sound and desktop reminders before an OpenCode prompt cache window ends",
   "homepage": "https://github.com/hamidi-dev/opencode-cachebell#readme",

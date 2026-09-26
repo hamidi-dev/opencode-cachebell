@@ -12,7 +12,7 @@ Add to `plugin` in `~/.config/opencode/opencode.json`, keeping your other entrie
 
 ```json
 {
-  "plugin": ["opencode-cachebell@0.4.0"]
+  "plugin": ["opencode-cachebell@0.5.0"]
 }
 ```
 
@@ -41,7 +41,7 @@ To choose a sound, replace the plugin entry with:
 
 ```json
 {
-  "plugin": [["opencode-cachebell@0.4.0", { "sound": "sheep-close" }]]
+  "plugin": [["opencode-cachebell@0.5.0", { "sound": "sheep-close" }]]
 }
 ```
 
