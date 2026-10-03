@@ -21,10 +21,11 @@ Use `XDG_CONFIG_HOME` instead of `~/.config` if configured. Keep other plugins
 and settings when adding CacheBell. Pin a published version and change the pin
 when upgrading; restart OpenCode after changes.
 
-For local development, replace the npm entry with an absolute path to the
-checkout's `index.js`. On Windows use a `file:///C:/.../index.js` URL. Keep the
-`sounds/` directory alongside `index.js`: since 0.2.0, copying just the JavaScript
-file is not enough. Remove any older auto-discovered `plugins/cachebell.js` copy
+For local development on OpenCode 2, replace the npm entry with the absolute
+path to the **checkout directory**, so both server and `./tui` entrypoints load.
+On OpenCode 1, use the checkout's `index.js` (or a `file:///C:/.../index.js` URL
+on Windows). Keep the `sounds/` directory alongside the code: since 0.2.0,
+copying just the JavaScript file is not enough. Remove any older auto-discovered `plugins/cachebell.js` copy
 to avoid duplicate notifications. No build or `npm install` is required.
 
 ## Timing
@@ -56,9 +57,22 @@ transport-level timestamp.
 - Notifications are not suppressed just because the terminal is focused.
 - Sessions are tracked independently. Notifications include project, session, and
   model so you can identify which conversation needs attention.
+- On OpenCode 2, `sessionScope: "open"` (the default, unreleased) delivers only
+  through a live TUI with the root session tab open. Inactive open tabs remain
+  eligible; closed tabs and exited clients stay silent. With tabs disabled,
+  only the viewed root session is eligible. A browser/desktop/API-only session
+  has no TUI component and therefore stays silent in this mode.
+- The TUI checks for due warnings once per second, using each tab's session
+  location. The server atomically claims each warning, preventing duplicates
+  across clients. The TUI rechecks open tabs after the response arrives.
+- Reopening a tab can warn within the remaining cache window. It never refreshes
+  the original deadline or replays a warning already claimed by another client.
+- `sessionScope: "all"` retains server-side delivery, including sessions whose
+  tabs or clients have closed. In this mode notifications run on the server's
+  machine; in `"open"` mode they run on the terminal client's machine.
 - Deleting a session or disposing the plugin cancels its timers. State is
-  in-memory: restarting OpenCode starts tracking with the next request, not with
-  historical messages. OpenCode must remain running for reminders to fire.
+  in-memory: restarting the server starts tracking with the next request, not with
+  historical messages. OpenCode 1 retains its existing process-bound behavior.
 
 **An unexpired timer does not guarantee a cache hit.** Prefix changes, compaction,
 model/provider changes, and routing can prevent reuse. OpenAI's 30-minute window
@@ -102,19 +116,32 @@ OpenCode versions supporting plugin option tuples can also use:
 }
 ```
 
-That example assumes you have **already enabled 1-hour caching** for your
-Anthropic requests. The plugin's override only changes reminders, not the API's
-cache policy. It cannot infer TTLs on individual cache breakpoints.
+The 3600-second override above assumes you have **already enabled 1-hour caching**
+for your Anthropic requests. The plugin's override only changes reminders, not
+the API's cache policy. It cannot infer TTLs on individual cache breakpoints.
+
+On OpenCode 2, use the native object form. For the unreleased open-session
+feature, configure the local package directory until a new version is published:
+
+```json
+{
+  "plugins": [{
+    "package": "/path/to/opencode-cachebell",
+    "options": { "sessionScope": "open", "sound": "sheep-close" }
+  }]
+}
+```
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `warningSeconds` | `120` | Lead time; positive number. If longer than the TTL, warn as soon as an eligible session becomes idle. |
 | `sound` | `"pulse"` | Bundled `"pulse"`, `"chime"`, `"knock"`, `"sheep-field"`, `"sheep-close"`, `"cat-meow"`, `"rooster-crow"`, `"horse-neigh"`, or `"cow-moo"`. `"sheep"` aliases Sheep Field; `true` uses Pulse; `false` disables sound. |
 | `notification` | `true` | Show the platform notification. Set both booleans to false to disable the plugin. |
+| `sessionScope` | `"open"` | OpenCode 2: `"open"` warns only in live TUIs with the session open; `"all"` retains server delivery for all tracked sessions. Unreleased; ignored on OpenCode 1. |
 | `ttlSeconds` | `{}` | Override TTL by `providerID/modelID`, API model ID, or provider ID, in that precedence order. `0` disables a match. |
 
 Model detection uses the underlying API model ID when available, so configuration
-aliases work. Environment values override tuple options (the `ttlSeconds` map is
+aliases work. Environment values override plugin options (the `ttlSeconds` map is
 replaced, not deep-merged). Invalid configuration disables the plugin and logs a
 warning instead of breaking OpenCode.
 

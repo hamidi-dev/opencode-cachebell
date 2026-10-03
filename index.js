@@ -1,7 +1,7 @@
-import childProcess from "node:child_process";
-import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
+import { CacheBellRPC } from "./rpc.js";
+import { notify } from "./notify.js";
 
 const BACKGROUND_AGENTS = new Set(["title", "summary", "compaction"]);
 
@@ -10,6 +10,7 @@ function settings(options = {}) {
     warningSeconds: 120,
     sound: "pulse",
     notification: true,
+    sessionScope: "open",
     ttlSeconds: {},
     ...options,
     ...JSON.parse(process.env.OPENCODE_CACHEBELL || "{}"),
@@ -17,6 +18,7 @@ function settings(options = {}) {
   if (!Number.isFinite(config.warningSeconds) || config.warningSeconds <= 0 ||
       ![true, false, "pulse", "chime", "knock", "sheep", "sheep-close", "sheep-field", "cat-meow", "rooster-crow", "horse-neigh", "cow-moo"].includes(config.sound) ||
       typeof config.notification !== "boolean" ||
+      !["open", "all"].includes(config.sessionScope) ||
       !config.ttlSeconds || typeof config.ttlSeconds !== "object" ||
       Array.isArray(config.ttlSeconds) ||
       Object.values(config.ttlSeconds).some((n) => !Number.isFinite(n) || n < 0)) {
@@ -35,80 +37,6 @@ function cacheTTL(model, config) {
   const gpt = apiID.match(/(?:^|\/)gpt-(\d+)(?:\.(\d+))?(?:[-.]|$)/i);
   if (gpt && (+gpt[1] >= 6 || (+gpt[1] === 5 && +gpt[2] >= 6))) return 1_800_000;
   return 0;
-}
-
-function run(command, args) {
-  return new Promise((resolve) => {
-    try {
-      childProcess.execFile(command, args, { timeout: 10_000, windowsHide: true, encoding: "utf8" },
-        (error, stdout) => resolve({ ok: !error, code: error?.code, stdout: stdout || "" }));
-    } catch (error) {
-      resolve({ ok: false, code: error.code, stdout: "" });
-    }
-  });
-}
-
-async function notify(title, message, config) {
-  if (!config.sound && !config.notification) return true;
-  const soundFile = config.sound ? fileURLToPath(new URL(
-    `./sounds/${config.sound === true ? "pulse" : config.sound === "sheep" ? "sheep-field" : config.sound}.wav`, import.meta.url,
-  )) : undefined;
-  const results = [];
-  if (os.platform() === "darwin") {
-    if (config.notification) {
-      results.push(run("osascript", ["-e", "on run argv", "-e",
-        "display notification (item 2 of argv) with title (item 1 of argv)",
-        "-e", "end run", title, message]));
-    }
-    if (soundFile) results.push(run("afplay", [soundFile]));
-  } else if (os.platform() === "win32" ||
-      (os.platform() === "linux" && /microsoft|wsl/i.test(os.release()))) {
-    let windowsSound = soundFile;
-    if (soundFile && os.platform() === "linux") {
-      // Cached npm files live inside WSL; Windows SoundPlayer needs a host path.
-      const translated = await run("wslpath", ["-w", soundFile]);
-      windowsSound = translated.ok ? translated.stdout.trim() : undefined;
-    }
-    // Encode data separately: session titles and file paths are never code.
-    const data = Buffer.from(JSON.stringify({ title, message, soundFile: windowsSound }), "utf8").toString("base64");
-    const script = [
-      "$ErrorActionPreference = 'Stop'",
-      "$soundFailed = $false",
-      `$data = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${data}')) | ConvertFrom-Json`,
-      ...(windowsSound ? [
-        "$player = $null",
-        "try {",
-        "$player = New-Object System.Media.SoundPlayer",
-        "$player.SoundLocation = $data.soundFile",
-        "$player.PlaySync()",
-        "} catch { $soundFailed = $true } finally { if ($player) { $player.Dispose() } }",
-      ] : []),
-      ...(config.notification ? [
-        "Add-Type -AssemblyName System.Windows.Forms",
-        "Add-Type -AssemblyName System.Drawing",
-        "$icon = New-Object System.Windows.Forms.NotifyIcon",
-        "try {",
-        "$icon.Icon = [System.Drawing.SystemIcons]::Information",
-        "$icon.Visible = $true",
-        "$icon.ShowBalloonTip(5000, $data.title, $data.message, [System.Windows.Forms.ToolTipIcon]::None)",
-        "Start-Sleep -Seconds 5",
-        "} finally { $icon.Dispose() }",
-      ] : []),
-      "if ($soundFailed) { exit 1 }",
-    ].join("\n");
-    const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden",
-      "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
-    let result = await run("powershell.exe", args);
-    if (result.code === "ENOENT" && os.platform() === "linux") {
-      result = await run("/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", args);
-    }
-    return result.ok && (!soundFile || Boolean(windowsSound));
-  } else {
-    // Optional ordinary Linux support; these commands are not needed on WSL.
-    if (config.notification) results.push(run("notify-send", ["--", title, message]));
-    if (soundFile) results.push(run("canberra-gtk-play", ["-f", soundFile]));
-  }
-  return (await Promise.all(results)).every((result) => result.ok);
 }
 
 /**
@@ -132,8 +60,30 @@ function createBell(config, directory, host) {
     state.timer = undefined;
   };
 
+  function claim(state) {
+    const request = state?.request;
+    if (disposed || state?.root !== true || state.status !== "idle" ||
+        !request?.confirmed || request.notified) return;
+    const remaining = request.deadline - Date.now();
+    if (remaining <= 0 || remaining > config.warningSeconds * 1000) return;
+    // Claim synchronously before another client can collect the same warning.
+    request.notified = true;
+    const seconds = Math.ceil(remaining / 1000);
+    const time = seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+    return {
+      sessionID: state.id,
+      title: `CacheBell - ${project}`,
+      message: `${state.title || state.id} - ${request.model}: ~${time} cache window remaining`,
+      sound: config.sound,
+      notification: config.notification,
+    };
+  }
+
   function schedule(state) {
     cancel(state);
+    // OpenCode 2 clients collect warnings for their open tabs. The persistent
+    // server must never play sounds after the user closes a tab or client.
+    if (host.pull) return;
     const request = state.request;
     if (disposed || state.root !== true || state.status !== "idle" ||
         !request?.confirmed || request.notified) return;
@@ -141,12 +91,9 @@ function createBell(config, directory, host) {
     if (remaining <= 0) return;
     const delay = remaining - config.warningSeconds * 1000;
     if (delay <= 0) {
-      request.notified = true;
-      const seconds = Math.ceil(remaining / 1000);
-      const time = seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
-      const title = `CacheBell - ${project}`;
-      const message = `${state.title || state.id} - ${request.model}: ~${time} cache window remaining`;
-      void notify(title, message, config).then((ok) => {
+      const warning = claim(state);
+      if (!warning) return;
+      void notify(warning.title, warning.message, config).then((ok) => {
         if (!ok) host.log("A CacheBell sound/notification failed. Check OS notification permissions and platform commands.");
       }).catch(() => host.log("CacheBell notification failed."));
       return;
@@ -179,6 +126,13 @@ function createBell(config, directory, host) {
   }
 
   return {
+    collect(sessionIDs) {
+      if (!host.pull) return [];
+      return [...new Set(sessionIDs)].flatMap((id) => {
+        const warning = claim(sessions.get(id));
+        return warning ? [warning] : [];
+      });
+    },
     /** A model request started: a fresh cache window, if the model has one. */
     request(sessionID, model) {
       if (disposed || deleted.has(sessionID)) return;
@@ -274,6 +228,7 @@ async function setup(ctx) {
   const directory = ctx.location?.directory;
   const bell = createBell(config, directory, {
     log,
+    pull: config.sessionScope === "open",
     session: async (sessionID) => {
       const info = await ctx.session.get({ sessionID });
       return info && {
@@ -283,6 +238,10 @@ async function setup(ctx) {
         directory: info.location?.directory,
       };
     },
+  });
+
+  const rpc = await ctx.rpc.register(CacheBellRPC, {
+    collect: async ({ sessionIDs }) => ({ warnings: bell.collect(sessionIDs) }),
   });
 
   await ctx.session.hook("model.request", (event) => {
@@ -339,9 +298,10 @@ async function setup(ctx) {
     }
   })();
 
-  return () => {
+  return async () => {
     controller.abort();
     bell.dispose();
+    await rpc.dispose();
   };
 }
 

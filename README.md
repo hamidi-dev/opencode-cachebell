@@ -8,15 +8,16 @@ beforehand**, while the agent is idle.
 
 ## Install
 
-Add to `plugin` in `~/.config/opencode/opencode.json`, keeping your other entries:
+For OpenCode 2, add to `plugins` in `~/.config/opencode/opencode.json`, keeping your other entries:
 
 ```json
 {
-  "plugin": ["opencode-cachebell@0.5.0"]
+  "plugins": ["opencode-cachebell@0.5.0"]
 }
 ```
 
-**Restart OpenCode.** It installs the package automatically.
+**Restart OpenCode.** It installs the package automatically. On OpenCode 1, use
+`"plugin"` instead of `"plugins"`.
 
 Works with OpenCode 1 and OpenCode 2 from the same package. Supports macOS and
 WSL, with best-effort native Windows and Linux desktop support.
@@ -41,13 +42,16 @@ To choose a sound, replace the plugin entry with:
 
 ```json
 {
-  "plugin": [["opencode-cachebell@0.5.0", { "sound": "sheep-close" }]]
+  "plugins": [{ "package": "opencode-cachebell@0.5.0", "options": { "sound": "sheep-close" } }]
 }
 ```
 
 Use `"pulse"`, `"chime"`, `"knock"`, `"sheep-field"`, `"sheep-close"`,
 `"cat-meow"`, `"rooster-crow"`, `"horse-neigh"`, `"cow-moo"`, or `false` for silence.
 `"sheep"` remains an alias for `"sheep-field"`. Restart after changes.
+
+On OpenCode 1, use the tuple form:
+`"plugin": [["opencode-cachebell@0.5.0", { "sound": "sheep-close" }]]`.
 
 Sheep Field is an excerpt of a [public-domain recording by earthcalling](https://commons.wikimedia.org/wiki/File:Sheep_bleating.ogg).
 Sheep Close is a [CC0 recording by TheKingOfGeeks360](https://freesound.org/people/TheKingOfGeeks360/sounds/803460/),
@@ -62,6 +66,30 @@ Cow Moo is excerpted from a [CC0 recording by Joseph Sardin](https://bigsoundban
 Defaults: **5 minutes for Claude**, **30 minutes for GPT-5.6+**. The clock starts
 with the model request, not when its answer finishes. Other models and custom
 cache durations need an override. These are estimates, not guaranteed cache hits.
+
+## Open sessions (unreleased)
+
+On OpenCode 2, reminders now default to **open session tabs only**. Switching to
+another tab keeps the reminder; closing the tab or terminal stops it. With tabs
+disabled, only the currently viewed session is eligible. The persistent server
+does not play sounds on its own. The included TUI component loads automatically.
+
+Set `"sessionScope": "all"` in the plugin's `options` to retain server-side
+reminders for all tracked sessions, even after closing their tabs or clients.
+The default is `"sessionScope": "open"`. This setting applies to OpenCode 2;
+OpenCode 1 retains its existing process-bound behavior.
+
+This feature is in the working tree; the published `0.5.0` package does not
+include it yet. To try it locally on OpenCode 2, use the **package directory**:
+
+```json
+{
+  "plugins": [{
+    "package": "/path/to/opencode-cachebell",
+    "options": { "sessionScope": "open" }
+  }]
+}
+```
 
 [Configuration and troubleshooting](docs/guide.md) |
 [npm](https://www.npmjs.com/package/opencode-cachebell) | MIT

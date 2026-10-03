@@ -5,6 +5,9 @@ import os from "node:os";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import plugin from "../index.js";
+import { notify } from "../notify.js";
+import tui from "../tui.js";
+import { CacheBellRPC } from "../rpc.js";
 
 const NOW = 1_800_000_000_000;
 const claude = { providerID: "anthropic", id: "claude-sonnet-4-6" };
@@ -439,7 +442,7 @@ function stream() {
   };
 }
 
-async function setupV2(t, { config, directory = "/projects/example", get } = {}) {
+async function setupV2(t, { config = { sessionScope: "all" }, directory = "/projects/example", get } = {}) {
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: NOW });
   t.mock.method(os, "platform", () => "darwin");
   t.mock.method(os, "release", () => "");
@@ -453,6 +456,7 @@ async function setupV2(t, { config, directory = "/projects/example", get } = {})
 
   const events = stream();
   const hooks = {};
+  let methods;
   const cleanup = await plugin.setup({
     options: config,
     location: { directory },
@@ -463,6 +467,11 @@ async function setupV2(t, { config, directory = "/projects/example", get } = {})
       hook: async (name, handler) => { hooks[name] = handler; },
     },
     event: { subscribe: () => events.iterable },
+    rpc: { register: async (definition, handlers) => {
+      assert.equal(definition, CacheBellRPC);
+      methods = handlers;
+      return { dispose: async () => {} };
+    } },
   });
   t.after(() => cleanup?.());
   await flush();
@@ -478,8 +487,201 @@ async function setupV2(t, { config, directory = "/projects/example", get } = {})
   const idle = (sessionID = "root") => emit("session.execution.succeeded", { sessionID });
   const advance = async (ms) => { t.mock.timers.tick(ms); await flush(); };
   const notifications = () => calls.filter((call) => call.command === "osascript");
-  return { calls, logs, emit, request, cached, idle, advance, notifications };
+  const collect = async (sessionIDs = ["root"]) => methods.collect({ sessionIDs });
+  return { calls, logs, emit, request, cached, idle, advance, notifications, collect, cleanup };
 }
+
+function setupUI(t, s, { open = ["root"], tabsEnabled = true, route = { type: "session", sessionID: "root" },
+    collect = s.collect, sessions = {} } = {}) {
+  const state = { open, tabsEnabled, route };
+  const requests = [];
+  const cleanup = tui.setup({
+    client: { rpc: (definition) => {
+      assert.equal(definition, CacheBellRPC);
+      return { collect: async ({ sessionIDs }, options) => {
+        requests.push({ sessionIDs, options });
+        return collect(sessionIDs, options);
+      } };
+    } },
+    ui: {
+      tabs: { enabled: () => state.tabsEnabled, list: () => state.open.map((sessionID) => ({ sessionID })) },
+      router: { current: () => state.route },
+    },
+    data: { session: {
+      get: (id) => sessions[id] || { location: { directory: "/projects/example" } },
+      root: (id) => id === "child" ? "root" : id,
+    } },
+  });
+  t.after(cleanup);
+  return { state, cleanup, requests };
+}
+
+async function arm(s, model = claude, id = "root") {
+  await s.request(model, id);
+  await s.cached(id);
+  await s.idle(id);
+}
+
+test("OpenCode 2 defaults to silence without an open client, while preserving the cache deadline", async (t) => {
+  const s = await setupV2(t, { config: {} });
+  await arm(s);
+  await s.advance(180_000);
+  assert.equal(s.calls.length, 0);
+  assert.deepEqual(await s.collect([]), { warnings: [] });
+  const { warnings } = await s.collect();
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0].message, /~2m 0s/);
+  assert.equal(s.calls.length, 0, "collecting never delivers on the server");
+  assert.deepEqual(await s.collect(), { warnings: [] }, "another client cannot claim it again");
+});
+
+test("OpenCode 2 open scope keeps tab switches audible and closed tabs silent", async (t) => {
+  const s = await setupV2(t, { config: {} });
+  const ui = setupUI(t, s, { open: ["root", "closed"], route: { type: "session", sessionID: "closed" } });
+  await arm(s);
+  await arm(s, claude, "closed");
+  ui.state.open = ["root"];
+  ui.state.route = { type: "home" }; // Root is an open background tab.
+  await s.advance(180_000);
+  assert.equal(s.notifications().length, 1);
+  assert.match(s.notifications()[0].args.at(-1), /Resumed/);
+  const { warnings } = await s.collect(["closed"]);
+  assert.equal(warnings.length, 1, "the closed tab was never collected by the TUI");
+});
+
+test("OpenCode 2 open scope reopens an unexpired window but never rings an expired one", async (t) => {
+  const s = await setupV2(t, { config: {} });
+  const ui = setupUI(t, s, { open: [] });
+  await arm(s);
+  await arm(s, claude, "expired");
+  await s.advance(200_000);
+  assert.equal(s.calls.length, 0);
+  ui.state.open = ["root"];
+  await s.advance(1_000);
+  assert.equal(s.notifications().length, 1);
+  assert.match(s.notifications()[0].args.at(-1), /~1m 39s/);
+  await s.advance(100_000);
+  ui.state.open = ["expired"];
+  await s.advance(1_000);
+  assert.equal(s.notifications().length, 1);
+});
+
+test("OpenCode 2 open scope rejects busy, unconfirmed, child and foreign-location windows", async (t) => {
+  const s = await setupV2(t, { config: {} });
+  await s.emit("session.created", { sessionID: "child", parentID: "root", location: { directory: "/projects/example" } });
+  await s.emit("session.created", { sessionID: "foreign", location: { directory: "/projects/other" } });
+  await arm(s, claude, "child");
+  await arm(s, claude, "foreign");
+  await s.request(claude, "uncached");
+  await s.idle("uncached");
+  await s.request(claude, "busy");
+  await s.cached("busy");
+  await s.advance(180_000);
+  assert.deepEqual(await s.collect(["child", "foreign", "uncached", "busy", "missing"]), { warnings: [] });
+  await s.idle("busy");
+  assert.equal((await s.collect(["busy", "busy"])).warnings.length, 1);
+});
+
+test("OpenCode 2 two clients play only one warning; closing the last client leaves the server silent", async (t) => {
+  const s = await setupV2(t, { config: {} });
+  const first = setupUI(t, s);
+  const second = setupUI(t, s);
+  await arm(s);
+  await s.advance(180_000);
+  assert.equal(s.notifications().length, 1);
+  first.cleanup();
+  second.cleanup();
+  await arm(s);
+  await s.advance(180_000);
+  assert.equal(s.notifications().length, 1);
+  await s.cleanup();
+  assert.deepEqual(await s.collect(), { warnings: [] });
+});
+
+for (const action of ["close tab", "close client"]) {
+  test(`OpenCode 2 does not deliver a response that arrives after ${action}`, async (t) => {
+    const s = await setupV2(t, { config: {} });
+    let resolve;
+    const ui = setupUI(t, s, { collect: () => new Promise((done) => { resolve = done; }) });
+    await flush();
+    if (action === "close tab") ui.state.open = [];
+    else ui.cleanup();
+    resolve({ warnings: [{ sessionID: "root", title: "CacheBell", message: "Due", sound: "pulse", notification: true }] });
+    await flush();
+    assert.equal(s.calls.length, 0);
+    if (action === "close client") {
+      assert.equal(ui.requests[0].options.signal.aborted, true);
+      await s.advance(10_000);
+      assert.equal(ui.requests.length, 1);
+    }
+  });
+}
+
+test("OpenCode 2 without tabs uses only the viewed root session", async (t) => {
+  const s = await setupV2(t, { config: {} });
+  const ui = setupUI(t, s, { tabsEnabled: false, open: ["other"], route: { type: "session", sessionID: "child" } });
+  await arm(s);
+  await arm(s, claude, "other");
+  await s.advance(180_000);
+  assert.equal(s.notifications().length, 1);
+  assert.deepEqual(ui.requests.at(-1).sessionIDs, ["root"]);
+  await arm(s);
+  ui.state.route = { type: "home" };
+  await s.advance(180_000);
+  assert.equal(s.notifications().length, 1);
+});
+
+test("OpenCode 2 routes tabs to their own locations and skips unavailable metadata", async (t) => {
+  const s = await setupV2(t, { config: {} });
+  const ui = setupUI(t, s, {
+    open: ["root", "foreign", "another", "missing"],
+    sessions: {
+      foreign: { location: { directory: "/projects/other" } },
+      another: { location: { directory: "/projects/example" } },
+      missing: {},
+    },
+    collect: async () => ({ warnings: [] }),
+  });
+  await flush();
+  assert.deepEqual(ui.requests.map((request) => [request.sessionIDs, request.options.location]), [
+    [["root", "another"], { directory: "/projects/example" }],
+    [["foreign"], { directory: "/projects/other" }],
+  ]);
+});
+
+test("OpenCode 2 all scope retains server delivery without duplicate client delivery", async (t) => {
+  const s = await setupV2(t, { config: { sessionScope: "all" } });
+  setupUI(t, s);
+  await arm(s);
+  await s.advance(180_000);
+  assert.equal(s.notifications().length, 1);
+  assert.deepEqual(await s.collect(), { warnings: [] });
+});
+
+test("a WSL tab closed during path translation does not launch PowerShell", async (t) => {
+  t.mock.method(os, "platform", () => "linux");
+  t.mock.method(os, "release", () => "microsoft-standard-WSL2");
+  const calls = [];
+  let translated;
+  t.mock.method(childProcess, "execFile", (command, args, options, callback) => {
+    calls.push(command);
+    translated = callback;
+  });
+  let open = true;
+  const result = notify("CacheBell", "Due", { sound: "pulse", notification: true }, { active: () => open });
+  open = false;
+  translated(null, "C:\\sounds\\pulse.wav\n");
+  assert.equal(await result, true);
+  assert.deepEqual(calls, ["wslpath"]);
+});
+
+test("invalid session scope disables the plugin", async (t) => {
+  const s = await setupV2(t, { config: { sessionScope: "closed" } });
+  await arm(s);
+  await s.advance(180_000);
+  assert.equal(s.calls.length, 0);
+  assert.match(s.logs.join("\n"), /Invalid CacheBell configuration/);
+});
 
 test("OpenCode 2: a confirmed Claude window rings two minutes before it closes", async (t) => {
   const s = await setupV2(t);

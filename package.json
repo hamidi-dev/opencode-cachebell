@@ -11,8 +11,8 @@
   "bugs": { "url": "https://github.com/hamidi-dev/opencode-cachebell/issues" },
   "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org" },
   "type": "module",
-  "exports": "./index.js",
-  "files": ["index.js", "README.md", "docs/guide.md", "sounds/*.wav"],
+  "exports": { ".": "./index.js", "./tui": "./tui.js" },
+  "files": ["index.js", "notify.js", "rpc.js", "tui.js", "README.md", "docs/guide.md", "sounds/*.wav"],
   "scripts": {
     "test": "node --test",
     "sounds:generate": "node scripts/generate-sounds.mjs",
