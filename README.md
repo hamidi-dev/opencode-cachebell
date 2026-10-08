@@ -12,7 +12,7 @@ For OpenCode 2, add to `plugins` in `~/.config/opencode/opencode.json`, keeping 
 
 ```json
 {
-  "plugins": ["opencode-cachebell@0.5.0"]
+  "plugins": ["opencode-cachebell@0.6.0"]
 }
 ```
 
@@ -42,7 +42,7 @@ To choose a sound, replace the plugin entry with:
 
 ```json
 {
-  "plugins": [{ "package": "opencode-cachebell@0.5.0", "options": { "sound": "sheep-close" } }]
+  "plugins": [{ "package": "opencode-cachebell@0.6.0", "options": { "sound": "sheep-close" } }]
 }
 ```
 
@@ -51,7 +51,7 @@ Use `"pulse"`, `"chime"`, `"knock"`, `"sheep-field"`, `"sheep-close"`,
 `"sheep"` remains an alias for `"sheep-field"`. Restart after changes.
 
 On OpenCode 1, use the tuple form:
-`"plugin": [["opencode-cachebell@0.5.0", { "sound": "sheep-close" }]]`.
+`"plugin": [["opencode-cachebell@0.6.0", { "sound": "sheep-close" }]]`.
 
 Sheep Field is an excerpt of a [public-domain recording by earthcalling](https://commons.wikimedia.org/wiki/File:Sheep_bleating.ogg).
 Sheep Close is a [CC0 recording by TheKingOfGeeks360](https://freesound.org/people/TheKingOfGeeks360/sounds/803460/),
@@ -67,7 +67,7 @@ Defaults: **5 minutes for Claude**, **30 minutes for GPT-5.6+**. The clock start
 with the model request, not when its answer finishes. Other models and custom
 cache durations need an override. These are estimates, not guaranteed cache hits.
 
-## Open sessions (unreleased)
+## Open sessions
 
 On OpenCode 2, reminders now default to **open session tabs only**. Switching to
 another tab keeps the reminder; closing the tab or terminal stops it. With tabs
@@ -78,18 +78,6 @@ Set `"sessionScope": "all"` in the plugin's `options` to retain server-side
 reminders for all tracked sessions, even after closing their tabs or clients.
 The default is `"sessionScope": "open"`. This setting applies to OpenCode 2;
 OpenCode 1 retains its existing process-bound behavior.
-
-This feature is in the working tree; the published `0.5.0` package does not
-include it yet. To try it locally on OpenCode 2, use the **package directory**:
-
-```json
-{
-  "plugins": [{
-    "package": "/path/to/opencode-cachebell",
-    "options": { "sessionScope": "open" }
-  }]
-}
-```
 
 [Configuration and troubleshooting](docs/guide.md) |
 [npm](https://www.npmjs.com/package/opencode-cachebell) | MIT

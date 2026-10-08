@@ -57,7 +57,7 @@ transport-level timestamp.
 - Notifications are not suppressed just because the terminal is focused.
 - Sessions are tracked independently. Notifications include project, session, and
   model so you can identify which conversation needs attention.
-- On OpenCode 2, `sessionScope: "open"` (the default, unreleased) delivers only
+- On OpenCode 2, `sessionScope: "open"` (the default) delivers only
   through a live TUI with the root session tab open. Inactive open tabs remain
   eligible; closed tabs and exited clients stay silent. With tabs disabled,
   only the viewed root session is eligible. A browser/desktop/API-only session
@@ -108,7 +108,7 @@ OpenCode versions supporting plugin option tuples can also use:
 ```json
 {
   "plugin": [
-    ["opencode-cachebell@0.5.0", {
+    ["opencode-cachebell@0.6.0", {
       "warningSeconds": 120,
       "ttlSeconds": { "anthropic": 3600 }
     }]
@@ -120,13 +120,12 @@ The 3600-second override above assumes you have **already enabled 1-hour caching
 for your Anthropic requests. The plugin's override only changes reminders, not
 the API's cache policy. It cannot infer TTLs on individual cache breakpoints.
 
-On OpenCode 2, use the native object form. For the unreleased open-session
-feature, configure the local package directory until a new version is published:
+On OpenCode 2, use the native object form:
 
 ```json
 {
   "plugins": [{
-    "package": "/path/to/opencode-cachebell",
+    "package": "opencode-cachebell@0.6.0",
     "options": { "sessionScope": "open", "sound": "sheep-close" }
   }]
 }
@@ -137,7 +136,7 @@ feature, configure the local package directory until a new version is published:
 | `warningSeconds` | `120` | Lead time; positive number. If longer than the TTL, warn as soon as an eligible session becomes idle. |
 | `sound` | `"pulse"` | Bundled `"pulse"`, `"chime"`, `"knock"`, `"sheep-field"`, `"sheep-close"`, `"cat-meow"`, `"rooster-crow"`, `"horse-neigh"`, or `"cow-moo"`. `"sheep"` aliases Sheep Field; `true` uses Pulse; `false` disables sound. |
 | `notification` | `true` | Show the platform notification. Set both booleans to false to disable the plugin. |
-| `sessionScope` | `"open"` | OpenCode 2: `"open"` warns only in live TUIs with the session open; `"all"` retains server delivery for all tracked sessions. Unreleased; ignored on OpenCode 1. |
+| `sessionScope` | `"open"` | OpenCode 2: `"open"` warns only in live TUIs with the session open; `"all"` retains server delivery for all tracked sessions. Ignored on OpenCode 1. |
 | `ttlSeconds` | `{}` | Override TTL by `providerID/modelID`, API model ID, or provider ID, in that precedence order. `0` disables a match. |
 
 Model detection uses the underlying API model ID when available, so configuration
